@@ -75,7 +75,7 @@ jobs:
           $incArgs = @()
           foreach ($i in $includes) { $incArgs += "/I$i" }
 
-          & cl.exe /nologo /std:c++latest /EHsc /O2 /MT /LD /DWIN32 /D_WINDOWS @incArgs $cpp /Fe:$out /link bcrypt.lib
+          & cl.exe /nologo /std:c++latest /EHsc /O2 /MD /LD /DWIN32 /D_WINDOWS @incArgs $cpp /Fe:$out /link bcrypt.lib
           if ($LASTEXITCODE -ne 0) { throw "cl.exe failed: $LASTEXITCODE" }
           if (-not (Test-Path $out)) { throw "helper dll was not produced" }
 

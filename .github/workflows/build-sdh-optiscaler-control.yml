@@ -1,0 +1,56 @@
+name: Build SDH OptiScaler Control test
+
+on:
+  push:
+    branches:
+      - sdh-optiscaler-control-test
+    paths:
+      - 'tools/sdh-optiscaler-control/**'
+      - '.github/workflows/build-sdh-optiscaler-control.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build helper
+        shell: cmd
+        run: |
+          cd tools\sdh-optiscaler-control
+          cl /nologo /std:c++20 /O2 /EHsc /LD sdh_optiscaler_control.cpp /link /OUT:sdh-optiscaler-control.asi bcrypt.lib
+
+      - name: Download current SDH OptiScaler payload
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/allians00758/steam_deck_helper_library/releases/download/dlls/sd-helper-optiscaler.tar.gz" -OutFile "$env:RUNNER_TEMP\sd-helper-optiscaler.tar.gz"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\opti" | Out-Null
+          tar -xzf "$env:RUNNER_TEMP\sd-helper-optiscaler.tar.gz" -C "$env:RUNNER_TEMP\opti"
+          $dxgi = Get-ChildItem "$env:RUNNER_TEMP\opti" -Filter dxgi.dll -Recurse | Select-Object -First 1
+          if (-not $dxgi) { throw "dxgi.dll not found in payload" }
+          $hash = (Get-FileHash $dxgi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $ver = (Get-Item $dxgi.FullName).VersionInfo.FileVersion
+          "DXGI=$($dxgi.FullName)" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Encoding utf8
+          "SHA256=$hash" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Append -Encoding utf8
+          "FILE_VERSION=$ver" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Append -Encoding utf8
+          dumpbin /headers $dxgi.FullName | Out-File "$env:RUNNER_TEMP\dxgi-headers.txt" -Encoding utf8
+          dumpbin /exports $dxgi.FullName | Out-File "$env:RUNNER_TEMP\dxgi-exports.txt" -Encoding utf8
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\artifact" | Out-Null
+          Copy-Item "tools\sdh-optiscaler-control\sdh-optiscaler-control.asi" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:RUNNER_TEMP\optiscaler-binary-report.txt" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:RUNNER_TEMP\dxgi-headers.txt" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:RUNNER_TEMP\dxgi-exports.txt" "$env:RUNNER_TEMP\artifact\"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdh-optiscaler-control-test
+          path: ${{ runner.temp }}\artifact

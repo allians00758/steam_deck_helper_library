@@ -590,6 +590,7 @@ static void writeState(uint64_t seq, bool ok, const std::string& error, bool hoo
         out << "hook_count=" << g_hooks.size() << "\n";
     }
     out << "dxgi_sha=" << kSupportedSha << "\n";
+    out << "control_root=" << g_root.string() << "\n";
     out << "seq=" << seq << "\n";
     out << "ok=" << (ok ? 1 : 0) << "\n";
     out << "error=" << error << "\n";
@@ -683,7 +684,20 @@ static bool initialize()
     wchar_t selfPath[MAX_PATH] = {};
     if (!GetModuleFileNameW(g_self, selfPath, MAX_PATH))
         return false;
-    g_root = std::filesystem::path(selfPath).parent_path().parent_path();
+
+    const auto payloadRoot = std::filesystem::path(selfPath).parent_path().parent_path();
+    g_root = payloadRoot;
+
+    wchar_t controlRoot[32768] = {};
+    const DWORD controlLen = GetEnvironmentVariableW(
+        L"SDH_OPTISCALER_CONTROL_DIR", controlRoot, static_cast<DWORD>(std::size(controlRoot)));
+    if (controlLen > 0 && controlLen < std::size(controlRoot))
+    {
+        std::error_code ec;
+        std::filesystem::path candidate(controlRoot);
+        if (std::filesystem::exists(candidate, ec) && std::filesystem::is_directory(candidate, ec))
+            g_root = candidate;
+    }
 
     g_opti = GetModuleHandleW(L"dxgi.dll");
     if (!g_opti)

@@ -1,0 +1,37 @@
+name: Extract SDH OptiScaler target
+
+on:
+  push:
+    branches:
+      - sdh-optiscaler-control-test
+    paths:
+      - '.github/workflows/extract-sdh-optiscaler-target.yml'
+
+jobs:
+  extract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and inspect target
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/allians00758/steam_deck_helper_library/releases/download/dlls/sd-helper-optiscaler.tar.gz" -OutFile "$env:RUNNER_TEMP\opti.tar.gz"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\opti" | Out-Null
+          tar -xzf "$env:RUNNER_TEMP\opti.tar.gz" -C "$env:RUNNER_TEMP\opti"
+          $dxgi = Get-ChildItem "$env:RUNNER_TEMP\opti" -Filter dxgi.dll -Recurse | Select-Object -First 1
+          if (-not $dxgi) { throw "dxgi.dll not found" }
+          Copy-Item $dxgi.FullName "$env:RUNNER_TEMP\target-dxgi.dll"
+          $vi=(Get-Item $dxgi.FullName).VersionInfo
+          "FILE_VERSION=$($vi.FileVersion)" | Out-File "$env:RUNNER_TEMP\metadata.txt" -Encoding utf8
+          "PRODUCT_VERSION=$($vi.ProductVersion)" | Out-File "$env:RUNNER_TEMP\metadata.txt" -Append -Encoding utf8
+          "PRODUCT_NAME=$($vi.ProductName)" | Out-File "$env:RUNNER_TEMP\metadata.txt" -Append -Encoding utf8
+          "FILE_DESCRIPTION=$($vi.FileDescription)" | Out-File "$env:RUNNER_TEMP\metadata.txt" -Append -Encoding utf8
+          "SHA256=$((Get-FileHash $dxgi.FullName -Algorithm SHA256).Hash.ToLowerInvariant())" | Out-File "$env:RUNNER_TEMP\metadata.txt" -Append -Encoding utf8
+          python tools\sdh-optiscaler-control\extract_strings.py "$($dxgi.FullName)" "$env:RUNNER_TEMP\interesting-strings.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdh-optiscaler-target
+          path: |
+            ${{ runner.temp }}\target-dxgi.dll
+            ${{ runner.temp }}\metadata.txt
+            ${{ runner.temp }}\interesting-strings.txt

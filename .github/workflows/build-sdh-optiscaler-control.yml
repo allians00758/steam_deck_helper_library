@@ -34,7 +34,13 @@ jobs:
           $dxgi = Get-ChildItem "$env:RUNNER_TEMP\opti" -Filter dxgi.dll -Recurse | Select-Object -First 1
           if (-not $dxgi) { throw "dxgi.dll not found in payload" }
           $hash = (Get-FileHash $dxgi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          $ver = (Get-Item $dxgi.FullName).VersionInfo.FileVersion
+          $vi = (Get-Item $dxgi.FullName).VersionInfo
+          $ver = $vi.FileVersion
+          "PRODUCT_VERSION=$($vi.ProductVersion)" | Out-File "$env:RUNNER_TEMP\optiscaler-version-extra.txt" -Encoding utf8
+          "FILE_DESCRIPTION=$($vi.FileDescription)" | Out-File "$env:RUNNER_TEMP\optiscaler-version-extra.txt" -Append -Encoding utf8
+          "PRODUCT_NAME=$($vi.ProductName)" | Out-File "$env:RUNNER_TEMP\optiscaler-version-extra.txt" -Append -Encoding utf8
+          "ORIGINAL_FILENAME=$($vi.OriginalFilename)" | Out-File "$env:RUNNER_TEMP\optiscaler-version-extra.txt" -Append -Encoding utf8
+          python tools\sdh-optiscaler-control\extract_strings.py "$($dxgi.FullName)" "$env:RUNNER_TEMP\dxgi-interesting-strings.txt"
           "DXGI=$($dxgi.FullName)" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Encoding utf8
           "SHA256=$hash" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Append -Encoding utf8
           "FILE_VERSION=$ver" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Append -Encoding utf8

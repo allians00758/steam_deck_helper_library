@@ -315,7 +315,7 @@ static bool applyUpscaler(Config* cfg, State& state, const std::string& preset, 
         cfg->Dx12Upscaler = "fsr31";
         cfg->VulkanUpscaler = preset == "fsr411" ? "fsr31_12" : "fsr31";
         cfg->FfxUpscalerIndex = preset == "ffx234" ? 2 : (preset == "ffx315" ? 1 : 0);
-        cfg->Fsr4Update = preset == "fsr411";
+        if (preset == "fsr411") cfg->Fsr4Update.reset(); else cfg->Fsr4Update = false;
         cfg->Fsr4ForceEnableInt8 = preset == "fsr411";
         cfg->Fsr4Preset.reset(); // Default/auto
     }
@@ -599,7 +599,7 @@ static void writeState(uint64_t seq, bool ok, const std::string& error, bool hoo
         out << "backend=" << currentConfiguredBackend(cfg, *state) << "\n";
         out << "ffx_index=" << cfg->FfxUpscalerIndex.value_or_default() << "\n";
         out << "ffx_upscaler_count=" << state->ffxUpscalerVersionIds.size() << "\n";
-        const auto ffxCount = std::min(state->ffxUpscalerVersionIds.size(), state->ffxUpscalerVersionNames.size());
+        const auto ffxCount = (std::min)(state->ffxUpscalerVersionIds.size(), state->ffxUpscalerVersionNames.size());
         for (size_t i = 0; i < ffxCount && i < 16; ++i)
         {
             const char* name = state->ffxUpscalerVersionNames[i];

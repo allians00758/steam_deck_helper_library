@@ -79,6 +79,7 @@ jobs:
           Copy-Item "$env:RUNNER_TEMP\optiscaler-binary-report.txt" "$env:RUNNER_TEMP\artifact\"
           Copy-Item "$env:RUNNER_TEMP\dxgi-headers.txt" "$env:RUNNER_TEMP\artifact\"
           Copy-Item "$env:RUNNER_TEMP\dxgi-exports.txt" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:DXGI_PATH" "$env:RUNNER_TEMP\artifact\target-dxgi.dll"
           Copy-Item "$env:RUNNER_TEMP\section-compare.txt" "$env:RUNNER_TEMP\artifact\"
           Copy-Item "$env:RUNNER_TEMP\candidate-sha256.txt" "$env:RUNNER_TEMP\artifact\"
           Copy-Item "$env:RUNNER_TEMP\candidate-headers.txt" "$env:RUNNER_TEMP\artifact\"

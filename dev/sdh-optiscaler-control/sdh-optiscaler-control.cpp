@@ -598,6 +598,14 @@ static void writeState(uint64_t seq, bool ok, const std::string& error, bool hoo
         out << "api=" << static_cast<int>(state->api) << "\n";
         out << "backend=" << currentConfiguredBackend(cfg, *state) << "\n";
         out << "ffx_index=" << cfg->FfxUpscalerIndex.value_or_default() << "\n";
+        out << "ffx_upscaler_count=" << state->ffxUpscalerVersionIds.size() << "\n";
+        const auto ffxCount = std::min(state->ffxUpscalerVersionIds.size(), state->ffxUpscalerVersionNames.size());
+        for (size_t i = 0; i < ffxCount && i < 16; ++i)
+        {
+            const char* name = state->ffxUpscalerVersionNames[i];
+            out << "ffx_" << i << "_name=" << (name ? name : "") << "\n";
+            out << "ffx_" << i << "_id=" << static_cast<unsigned long long>(state->ffxUpscalerVersionIds[i]) << "\n";
+        }
         out << "quality_enabled=" << (cfg->UpscaleRatioOverrideEnabled.value_or_default() ? 1 : 0) << "\n";
         out << "quality_ratio=" << cfg->UpscaleRatioOverrideValue.value_or_default() << "\n";
         out << "sharpness_enabled=" << (cfg->OverrideSharpness.value_or_default() ? 1 : 0) << "\n";

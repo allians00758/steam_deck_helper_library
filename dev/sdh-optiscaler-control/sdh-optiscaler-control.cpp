@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <bcrypt.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 
 #include <algorithm>
 #include <atomic>
@@ -34,13 +35,24 @@ constexpr char kSupportedSha[] =
 using ConfigInstanceFn = Config* (__cdecl*)();
 using StateInstanceFn = State& (__cdecl*)();
 using PresentFn = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+using Present1Fn = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
 
 HMODULE g_self = nullptr;
 HMODULE g_opti = nullptr;
 ConfigInstanceFn g_configInstance = nullptr;
 StateInstanceFn g_stateInstance = nullptr;
-PresentFn g_originalPresent = nullptr;
-void** g_hookSlot = nullptr;
+
+struct HookRecord
+{
+    void** slot = nullptr;
+    void* original = nullptr;
+    int kind = 0; // 8 = Present, 22 = Present1
+};
+
+std::mutex g_hookMutex;
+std::vector<HookRecord> g_hooks;
+std::atomic<uint64_t> g_presentHits { 0 };
+std::atomic<uint64_t> g_present1Hits { 0 };
 std::atomic<bool> g_running { false };
 std::atomic<uint64_t> g_lastCompletedSeq { 0 };
 std::filesystem::path g_root;
@@ -397,48 +409,125 @@ static void completePendingOnPresent()
     g_lastCompletedSeq.store(command->seq, std::memory_order_release);
 }
 
-static HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* self, UINT sync, UINT flags)
+static void* originalForSlot(void** slot, int kind)
 {
-    completePendingOnPresent();
-    return g_originalPresent ? g_originalPresent(self, sync, flags) : E_FAIL;
+    std::lock_guard lock(g_hookMutex);
+    for (const auto& record : g_hooks)
+        if (record.slot == slot && record.kind == kind)
+            return record.original;
+    return nullptr;
 }
 
-static bool ensurePresentHook()
+static HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* self, UINT sync, UINT flags)
 {
-    if (!g_stateInstance)
+    g_presentHits.fetch_add(1, std::memory_order_relaxed);
+    completePendingOnPresent();
+
+    void** vtable = self ? *reinterpret_cast<void***>(self) : nullptr;
+    auto original = vtable ? reinterpret_cast<PresentFn>(originalForSlot(&vtable[8], 8)) : nullptr;
+    return original ? original(self, sync, flags) : E_FAIL;
+}
+
+static HRESULT STDMETHODCALLTYPE present1Hook(IDXGISwapChain1* self, UINT sync, UINT flags,
+                                              const DXGI_PRESENT_PARAMETERS* params)
+{
+    g_present1Hits.fetch_add(1, std::memory_order_relaxed);
+    completePendingOnPresent();
+
+    void** vtable = self ? *reinterpret_cast<void***>(self) : nullptr;
+    auto original = vtable ? reinterpret_cast<Present1Fn>(originalForSlot(&vtable[22], 22)) : nullptr;
+    return original ? original(self, sync, flags, params) : E_FAIL;
+}
+
+static bool installHook(void** slot, void* hook, int kind)
+{
+    if (!slot)
         return false;
 
-    State& state = g_stateInstance();
-    IDXGISwapChain* swap = state.currentRealSwapchain ? state.currentRealSwapchain : state.currentSwapchain;
-    if (!swap)
-        return false;
-
-    void** vtable = *reinterpret_cast<void***>(swap);
-    if (!vtable)
-        return false;
-    void** slot = &vtable[8];
-
-    if (*slot == reinterpret_cast<void*>(&presentHook))
     {
-        g_hookSlot = slot;
-        return true;
+        std::lock_guard lock(g_hookMutex);
+        for (const auto& record : g_hooks)
+        {
+            if (record.slot != slot || record.kind != kind)
+                continue;
+            if (*slot == hook)
+                return true;
+
+            DWORD oldProtect = 0;
+            if (!VirtualProtect(slot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
+                return false;
+            InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(slot), hook);
+            DWORD ignored = 0;
+            VirtualProtect(slot, sizeof(void*), oldProtect, &ignored);
+            return *slot == hook;
+        }
     }
 
     DWORD oldProtect = 0;
     if (!VirtualProtect(slot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
         return false;
 
-    auto previous = InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(slot),
-                                               reinterpret_cast<PVOID>(&presentHook));
+    auto previous = InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(slot), hook);
     DWORD ignored = 0;
     VirtualProtect(slot, sizeof(void*), oldProtect, &ignored);
 
-    if (!previous || previous == reinterpret_cast<void*>(&presentHook))
+    if (!previous || previous == hook)
+        return previous == hook;
+
+    {
+        std::lock_guard lock(g_hookMutex);
+        g_hooks.push_back({slot, previous, kind});
+    }
+    return true;
+}
+
+static bool ensurePresentHooks()
+{
+    if (!g_stateInstance)
         return false;
 
-    g_originalPresent = reinterpret_cast<PresentFn>(previous);
-    g_hookSlot = slot;
-    return true;
+    State& state = g_stateInstance();
+    IDXGISwapChain* candidates[2] = { state.currentSwapchain, state.currentRealSwapchain };
+    bool installed = false;
+
+    for (auto* swap : candidates)
+    {
+        if (!swap)
+            continue;
+
+        void** vtable = *reinterpret_cast<void***>(swap);
+        if (vtable)
+            installed = installHook(&vtable[8], reinterpret_cast<void*>(&presentHook), 8) || installed;
+
+        IDXGISwapChain1* swap1 = nullptr;
+        if (SUCCEEDED(swap->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&swap1))) && swap1)
+        {
+            void** vtable1 = *reinterpret_cast<void***>(swap1);
+            if (vtable1)
+                installed = installHook(&vtable1[22], reinterpret_cast<void*>(&present1Hook), 22) || installed;
+            swap1->Release();
+        }
+    }
+
+    return installed;
+}
+
+static bool hooksStillInstalled()
+{
+    std::lock_guard lock(g_hookMutex);
+    if (g_hooks.empty())
+        return false;
+    for (const auto& record : g_hooks)
+    {
+        if (!record.slot)
+            continue;
+        void* expected = record.kind == 22
+            ? reinterpret_cast<void*>(&present1Hook)
+            : reinterpret_cast<void*>(&presentHook);
+        if (*record.slot == expected)
+            return true;
+    }
+    return false;
 }
 
 static std::optional<Command> parseCommand(const std::filesystem::path& path)
@@ -494,6 +583,12 @@ static void writeState(uint64_t seq, bool ok, const std::string& error, bool hoo
     out << "protocol=" << kProtocol << "\n";
     out << "ready=" << ((cfg && state) ? 1 : 0) << "\n";
     out << "present_hook=" << (hookReady ? 1 : 0) << "\n";
+    out << "present_hits=" << g_presentHits.load(std::memory_order_relaxed) << "\n";
+    out << "present1_hits=" << g_present1Hits.load(std::memory_order_relaxed) << "\n";
+    {
+        std::lock_guard lock(g_hookMutex);
+        out << "hook_count=" << g_hooks.size() << "\n";
+    }
     out << "dxgi_sha=" << kSupportedSha << "\n";
     out << "seq=" << seq << "\n";
     out << "ok=" << (ok ? 1 : 0) << "\n";
@@ -527,8 +622,8 @@ static DWORD WINAPI workerThread(void*)
 
     while (g_running.load(std::memory_order_acquire))
     {
-        if (!hookReady || g_hookSlot == nullptr || *g_hookSlot != reinterpret_cast<void*>(&presentHook))
-            hookReady = ensurePresentHook();
+        if (!hookReady || !hooksStillInstalled())
+            hookReady = ensurePresentHooks();
 
         if (hookReady != reportedHookReady)
         {
@@ -561,7 +656,11 @@ static DWORD WINAPI workerThread(void*)
                 }
                 else
                 {
-                    error = hookReady ? "present_timeout" : "present_hook_unavailable";
+                    const auto p0 = g_presentHits.load(std::memory_order_relaxed);
+                    const auto p1 = g_present1Hits.load(std::memory_order_relaxed);
+                    error = hookReady
+                        ? (p0 == 0 && p1 == 0 ? "present_and_present1_timeout" : "render_callback_timeout")
+                        : "present_hook_unavailable";
                 }
             }
             writeState(command->seq, ok, error, hookReady);

@@ -82,10 +82,14 @@ jobs:
           $ErrorActionPreference = "Stop"
           Set-Location "$env:RUNNER_TEMP\OptiScaler"
           msbuild . /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
-          $built = Get-ChildItem "$env:RUNNER_TEMP\OptiScaler\x64\Release" -Recurse -File -Include *.dll |
-            Where-Object { $_.Length -gt 15000000 -and $_.Length -lt 40000000 } |
-            Sort-Object Length -Descending | Select-Object -First 1
-          if (-not $built) { throw "Built OptiScaler DLL not found" }
+          $built = Get-ChildItem "$env:RUNNER_TEMP\OptiScaler\x64\Release" -Recurse -File |
+            Where-Object { $_.Name -ieq "OptiScaler.dll" } |
+            Select-Object -First 1
+          if (-not $built) {
+            Get-ChildItem "$env:RUNNER_TEMP\OptiScaler\x64\Release" -Recurse -File |
+              ForEach-Object { "CANDIDATE=$($_.FullName) SIZE=$($_.Length)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt" }
+            throw "Built OptiScaler.dll not found"
+          }
           Copy-Item $built.FullName "$env:GITHUB_WORKSPACE\built-optiscaler.dll"
           "BUILT=$($built.FullName)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
           "BUILT_SHA=$((Get-FileHash $built.FullName -Algorithm SHA256).Hash.ToLower())" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"

@@ -40,6 +40,49 @@ jobs:
           "FILE_VERSION=$ver" | Out-File "$env:RUNNER_TEMP\optiscaler-binary-report.txt" -Append -Encoding utf8
           dumpbin /headers $dxgi.FullName | Out-File "$env:RUNNER_TEMP\dxgi-headers.txt" -Encoding utf8
           dumpbin /exports $dxgi.FullName | Out-File "$env:RUNNER_TEMP\dxgi-exports.txt" -Encoding utf8
+          "DXGI_PATH=$($dxgi.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Checkout candidate OptiScaler source
+        uses: actions/checkout@v4
+        with:
+          repository: optiscaler/OptiScaler
+          ref: da70e61e1542a0b99adcb24168ff941e42109567
+          submodules: recursive
+          path: upstream
+
+      - name: Build candidate OptiScaler Release x64
+        shell: cmd
+        run: |
+          msbuild upstream\OptiScaler.sln /m /p:Configuration=Release /p:Platform=x64 /p:GenerateMapFile=true
+
+      - name: Compare PE code sections
+        shell: pwsh
+        run: |
+          python -m pip install pefile
+          $candidate = Get-ChildItem "upstream\x64\Release\a" -Filter OptiScaler.dll -Recurse | Select-Object -First 1
+          if (-not $candidate) { throw "candidate OptiScaler.dll not found" }
+          @'
+import hashlib, os, pefile
+target = os.environ['DXGI_PATH']
+candidate = r'''$($candidate.FullName)'''
+out = os.path.join(os.environ['RUNNER_TEMP'], 'section-compare.txt')
+def sections(path):
+    pe = pefile.PE(path, fast_load=False)
+    rows = {}
+    for sec in pe.sections:
+        name = sec.Name.rstrip(b'\0').decode('ascii', 'replace')
+        data = sec.get_data()
+        rows[name] = (len(data), hashlib.sha256(data).hexdigest())
+    return rows
+a = sections(target)
+b = sections(candidate)
+with open(out, 'w', encoding='utf-8') as f:
+    f.write(f'TARGET={target}\nCANDIDATE={candidate}\n')
+    for name in sorted(set(a) | set(b)):
+        f.write(f'{name}: target={a.get(name)} candidate={b.get(name)} match={a.get(name)==b.get(name)}\n')
+'@ | python -
+          (Get-FileHash $candidate.FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Out-File "$env:RUNNER_TEMP\candidate-sha256.txt" -Encoding utf8
+          dumpbin /headers $candidate.FullName | Out-File "$env:RUNNER_TEMP\candidate-headers.txt" -Encoding utf8
 
       - name: Package artifact
         shell: pwsh
@@ -49,6 +92,11 @@ jobs:
           Copy-Item "$env:RUNNER_TEMP\optiscaler-binary-report.txt" "$env:RUNNER_TEMP\artifact\"
           Copy-Item "$env:RUNNER_TEMP\dxgi-headers.txt" "$env:RUNNER_TEMP\artifact\"
           Copy-Item "$env:RUNNER_TEMP\dxgi-exports.txt" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:RUNNER_TEMP\section-compare.txt" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:RUNNER_TEMP\candidate-sha256.txt" "$env:RUNNER_TEMP\artifact\"
+          Copy-Item "$env:RUNNER_TEMP\candidate-headers.txt" "$env:RUNNER_TEMP\artifact\"
+          $map = Get-ChildItem "upstream" -Filter *.map -Recurse | Select-Object -First 1
+          if ($map) { Copy-Item $map.FullName "$env:RUNNER_TEMP\artifact\candidate.map" }
 
       - uses: actions/upload-artifact@v4
         with:

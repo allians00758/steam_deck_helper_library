@@ -1,4 +1,4 @@
-name: SDH OptiScaler Control Diagnose
+name: SDH OptiScaler Control Build Probe
 
 on:
   push:
@@ -7,11 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
-    runs-on: windows-latest
+  probe:
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Prepare MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Download current SDH OptiScaler package
         shell: pwsh
@@ -21,44 +25,100 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sd-helper-optiscaler.tar.gz"
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\opti" | Out-Null
           tar -xzf "$env:RUNNER_TEMP\sd-helper-optiscaler.tar.gz" -C "$env:RUNNER_TEMP\opti"
+          $dxgi = Get-ChildItem "$env:RUNNER_TEMP\opti" -Recurse -Filter dxgi.dll | Select-Object -First 1
+          if (-not $dxgi) { throw "dxgi.dll not found" }
+          Copy-Item $dxgi.FullName "$env:GITHUB_WORKSPACE\release-dxgi.dll"
+          $ver = Get-ChildItem "$env:RUNNER_TEMP\opti" -Recurse -Filter optiscaler_version | Select-Object -First 1
+          if ($ver) { Copy-Item $ver.FullName "$env:GITHUB_WORKSPACE\optiscaler_version" }
+          "RELEASE_SHA=$((Get-FileHash $dxgi.FullName -Algorithm SHA256).Hash.ToLower())" | Out-File "$env:GITHUB_WORKSPACE\probe.txt" -Encoding utf8
+          $vi = (Get-Item $dxgi.FullName).VersionInfo
+          "FileVersion=$($vi.FileVersion)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
+          "ProductVersion=$($vi.ProductVersion)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
+          "SIZE=$($dxgi.Length)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
 
-      - name: Inspect package and dxgi
+      - name: Dump released DLL
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $root = "$env:RUNNER_TEMP\opti"
-          $dxgi = Get-ChildItem -Path $root -Recurse -Filter dxgi.dll | Select-Object -First 1
-          if (-not $dxgi) { throw "dxgi.dll not found" }
-          $out = Join-Path $env:GITHUB_WORKSPACE "optiscaler-diagnose.txt"
-          "DXGI=$($dxgi.FullName)" | Out-File $out -Encoding utf8
-          "SHA256=$((Get-FileHash $dxgi.FullName -Algorithm SHA256).Hash.ToLower())" | Add-Content $out
-          "SIZE=$($dxgi.Length)" | Add-Content $out
-          $vi = (Get-Item $dxgi.FullName).VersionInfo
-          "FileVersion=$($vi.FileVersion)" | Add-Content $out
-          "ProductVersion=$($vi.ProductVersion)" | Add-Content $out
-          "ProductName=$($vi.ProductName)" | Add-Content $out
-          "" | Add-Content $out
-          "=== VERSION FILES ===" | Add-Content $out
-          Get-ChildItem -Path $root -Recurse -File | Where-Object { $_.Name -match 'version|build|OptiScaler.ini' } | ForEach-Object {
-            "FILE=$($_.FullName)" | Add-Content $out
-            if ($_.Length -lt 65536 -and $_.Extension -ne ".dll") {
-              try { Get-Content $_.FullName -Raw | Add-Content $out } catch {}
-            }
+          "=== RELEASE EXPORTS ===" | Add-Content probe.txt
+          & dumpbin.exe /nologo /exports "$env:GITHUB_WORKSPACE\release-dxgi.dll" | Add-Content probe.txt
+          "=== RELEASE HEADERS ===" | Add-Content probe.txt
+          & dumpbin.exe /nologo /headers "$env:GITHUB_WORKSPACE\release-dxgi.dll" | Add-Content probe.txt
+
+      - name: Clone exact OptiScaler source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git clone --recursive https://github.com/optiscaler/OptiScaler.git "$env:RUNNER_TEMP\OptiScaler"
+          Set-Location "$env:RUNNER_TEMP\OptiScaler"
+          git checkout 8dac650cbf90c85ca1d46747a66fc98118be75b8
+          git submodule update --init --recursive
+
+      - name: Reproduce build metadata and enable MAP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $src = "$env:RUNNER_TEMP\OptiScaler"
+          Set-Content -Path "$src\OptiScaler\resource_build_date.h" -Value '#define VER_BUILD_DATE "20260905_113850"' -Encoding ascii
+          Set-Content -Path "$src\OptiScaler\resource_build_commit.h" -Value '#define VER_BUILD_COMMIT "8dac650"' -Encoding ascii
+
+          $proj = "$src\OptiScaler\OptiScaler.vcxproj"
+          $xml = Get-Content $proj -Raw
+          # Disable the timestamp-generating pre-build event so the released metadata is preserved.
+          $xml = [regex]::Replace(
+            $xml,
+            '<PreBuildEvent>\s*<Command>powershell -NoProfile -Command "Start-Sleep[\s\S]*?</Command>\s*</PreBuildEvent>',
+            '<PreBuildEvent><Command></Command></PreBuildEvent>'
+          )
+          # Generate a linker MAP without otherwise changing Release code generation.
+          $needle = '<AdditionalOptions>/ignore:4099</AdditionalOptions>'
+          $replacement = $needle + '<GenerateMapFile>true</GenerateMapFile><MapFileName>$(OutDir)OptiScaler.map</MapFileName>'
+          $xml = $xml.Replace($needle, $replacement)
+          Set-Content $proj $xml -Encoding utf8
+
+      - name: Build exact source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location "$env:RUNNER_TEMP\OptiScaler"
+          msbuild . /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
+          $built = Get-ChildItem "$env:RUNNER_TEMP\OptiScaler\x64\Release" -Recurse -File -Include *.dll |
+            Where-Object { $_.Length -gt 15000000 -and $_.Length -lt 40000000 } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $built) { throw "Built OptiScaler DLL not found" }
+          Copy-Item $built.FullName "$env:GITHUB_WORKSPACE\built-optiscaler.dll"
+          "BUILT=$($built.FullName)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
+          "BUILT_SHA=$((Get-FileHash $built.FullName -Algorithm SHA256).Hash.ToLower())" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
+          "BUILT_SIZE=$($built.Length)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
+          $map = Get-ChildItem "$env:RUNNER_TEMP\OptiScaler" -Recurse -Filter OptiScaler.map | Select-Object -First 1
+          if ($map) {
+            Copy-Item $map.FullName "$env:GITHUB_WORKSPACE\OptiScaler.map"
+            "MAP=$($map.FullName)" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
+          } else {
+            "MAP=NOT_FOUND" | Add-Content "$env:GITHUB_WORKSPACE\probe.txt"
           }
-          "" | Add-Content $out
-          "=== TOP FILES ===" | Add-Content $out
-          Get-ChildItem -Path $root -Recurse -File | ForEach-Object {
-            "$($_.FullName.Substring($root.Length+1)) | $($_.Length)" | Add-Content $out
+
+      - name: Extract symbols relevant to SDH control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path OptiScaler.map) {
+            "=== MAP SYMBOLS ===" | Add-Content probe.txt
+            Select-String -Path OptiScaler.map -Pattern 'Config@.*Instance|MenuCommon@.*ReInitUpscaler|WndProc@MenuCommon|ChangeFeature@FeatureProvider|SaveIni@Config' |
+              ForEach-Object { $_.Line } | Add-Content probe.txt
           }
-          "" | Add-Content $out
-          "=== EXPORTS ===" | Add-Content $out
-          cmd /c "dumpbin /nologo /exports \"$($dxgi.FullName)\"" | Add-Content $out
-          "" | Add-Content $out
-          "=== HEADERS ===" | Add-Content $out
-          cmd /c "dumpbin /nologo /headers \"$($dxgi.FullName)\"" | Add-Content $out
-          Get-Content $out
+          "=== BUILT EXPORTS ===" | Add-Content probe.txt
+          & dumpbin.exe /nologo /exports "$env:GITHUB_WORKSPACE\built-optiscaler.dll" | Add-Content probe.txt
+          Get-Content probe.txt
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: optiscaler-diagnose
-          path: optiscaler-diagnose.txt
+          name: sdh-optiscaler-control-probe
+          path: |
+            probe.txt
+            release-dxgi.dll
+            built-optiscaler.dll
+            OptiScaler.map
+            optiscaler_version
+          if-no-files-found: warn

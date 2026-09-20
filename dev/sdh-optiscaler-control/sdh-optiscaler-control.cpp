@@ -518,13 +518,23 @@ static DWORD WINAPI workerThread(void*)
 {
     const auto cmdPath = g_root / L"sdh-control.cmd";
     uint64_t seen = 0;
+    if (auto existing = parseCommand(cmdPath); existing)
+        seen = existing->seq; // Never replay a command left by a previous process.
+
     bool hookReady = false;
-    writeState(0, true, "", false);
+    bool reportedHookReady = false;
+    writeState(seen, true, "", false);
 
     while (g_running.load(std::memory_order_acquire))
     {
         if (!hookReady || g_hookSlot == nullptr || *g_hookSlot != reinterpret_cast<void*>(&presentHook))
             hookReady = ensurePresentHook();
+
+        if (hookReady != reportedHookReady)
+        {
+            reportedHookReady = hookReady;
+            writeState(seen, true, "", hookReady);
+        }
 
         auto command = parseCommand(cmdPath);
         if (command && command->seq > seen)
@@ -556,11 +566,6 @@ static DWORD WINAPI workerThread(void*)
             }
             writeState(command->seq, ok, error, hookReady);
         }
-        else
-        {
-            writeState(seen, true, "", hookReady);
-        }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return 0;

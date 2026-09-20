@@ -1,0 +1,64 @@
+name: SDH OptiScaler Control Diagnose
+
+on:
+  push:
+    branches:
+      - sdh-optiscaler-control-dev
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Download current SDH OptiScaler package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/allians00758/steam_deck_helper_library/releases/download/dlls/sd-helper-optiscaler.tar.gz"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sd-helper-optiscaler.tar.gz"
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\opti" | Out-Null
+          tar -xzf "$env:RUNNER_TEMP\sd-helper-optiscaler.tar.gz" -C "$env:RUNNER_TEMP\opti"
+
+      - name: Inspect package and dxgi
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "$env:RUNNER_TEMP\opti"
+          $dxgi = Get-ChildItem -Path $root -Recurse -Filter dxgi.dll | Select-Object -First 1
+          if (-not $dxgi) { throw "dxgi.dll not found" }
+          $out = Join-Path $env:GITHUB_WORKSPACE "optiscaler-diagnose.txt"
+          "DXGI=$($dxgi.FullName)" | Out-File $out -Encoding utf8
+          "SHA256=$((Get-FileHash $dxgi.FullName -Algorithm SHA256).Hash.ToLower())" | Add-Content $out
+          "SIZE=$($dxgi.Length)" | Add-Content $out
+          $vi = (Get-Item $dxgi.FullName).VersionInfo
+          "FileVersion=$($vi.FileVersion)" | Add-Content $out
+          "ProductVersion=$($vi.ProductVersion)" | Add-Content $out
+          "ProductName=$($vi.ProductName)" | Add-Content $out
+          "" | Add-Content $out
+          "=== VERSION FILES ===" | Add-Content $out
+          Get-ChildItem -Path $root -Recurse -File | Where-Object { $_.Name -match 'version|build|OptiScaler.ini' } | ForEach-Object {
+            "FILE=$($_.FullName)" | Add-Content $out
+            if ($_.Length -lt 65536 -and $_.Extension -ne ".dll") {
+              try { Get-Content $_.FullName -Raw | Add-Content $out } catch {}
+            }
+          }
+          "" | Add-Content $out
+          "=== TOP FILES ===" | Add-Content $out
+          Get-ChildItem -Path $root -Recurse -File | ForEach-Object {
+            "$($_.FullName.Substring($root.Length+1)) | $($_.Length)" | Add-Content $out
+          }
+          "" | Add-Content $out
+          "=== EXPORTS ===" | Add-Content $out
+          cmd /c "dumpbin /nologo /exports \"$($dxgi.FullName)\"" | Add-Content $out
+          "" | Add-Content $out
+          "=== HEADERS ===" | Add-Content $out
+          cmd /c "dumpbin /nologo /headers \"$($dxgi.FullName)\"" | Add-Content $out
+          Get-Content $out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optiscaler-diagnose
+          path: optiscaler-diagnose.txt

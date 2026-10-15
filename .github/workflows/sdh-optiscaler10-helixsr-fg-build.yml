@@ -49,10 +49,8 @@ jobs:
         run: |
           $out='source/x64/Release/a/OptiScaler.dll'
           if (!(Test-Path $out)) { throw "MSVC DLL absent" }
-          $exports=(dumpbin /exports $out | Out-String)
-          foreach ($n in @('SDH_Control_Version','SDH_Control_Apply','SDH_Control_Snapshot','SDH_Control_RealSwapchain','SDH_Control_ConfigPathW')) {
-            if (!$exports.Contains($n)) { throw "Missing export: $n" }
-          }
+          python sdh-opti10-ci/verify_pe.py $out SDH_Control_Version SDH_Control_Apply SDH_Control_Snapshot SDH_Control_RealSwapchain SDH_Control_ConfigPathW
+          if ($LASTEXITCODE -ne 0) { throw "SDH PE exports are missing" }
           New-Item -ItemType Directory -Force result | Out-Null
           Copy-Item $out result/OptiScaler.dll
           Copy-Item sdh-opti10-ci/SDHControlBridge.cpp result/SDHControlBridge.cpp

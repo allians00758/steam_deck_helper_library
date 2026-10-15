@@ -78,6 +78,7 @@ extern "C" __declspec(dllexport) uint32_t __cdecl SDH_Control_Apply(const char* 
  if(helix&&(!ready()||st.api!=DX12)){error(err,cap,"helixsr_fg_not_ready");return 0;}
  if(helix&&st.activeFgInput!=FGInput::NvngxFG&&c->FGInput.value_or_default()!=FGInput::NvngxFG){error(err,cap,"native_nvngx_fg_input_required");return 0;}
  if(on(p,"has_latencyflex_mode")&&(num(val(p,"latencyflex_mode"),-1)<0||num(val(p,"latencyflex_mode"),-1)>2)){error(err,cap,"invalid_latencyflex_mode");return 0;}
+ if(on(p,"has_shader")||on(p,"has_scale")||on(p,"has_motion_sharpness")||on(p,"has_contrast")||on(p,"has_fg_smoothness")||on(p,"has_color_space")||on(p,"has_auto_exposure")||on(p,"has_motion_vectors")||on(p,"has_root_signature_fix")||on(p,"has_resource_barrier_fix")||on(p,"has_precompiled_shaders")||on(p,"has_xess_build_pipelines")||on(p,"has_xess_create_heaps")||on(p,"has_shortcut_key")){error(err,cap,"control_requires_full_bridge_dev1");return 0;}
  if(on(p,"has_upscaler")){if(st.api==DX12)c->Dx12Upscaler.set_volatile_value(u);else if(st.api==DX11)c->Dx11Upscaler.set_volatile_value(u);else if(st.api==Vulkan)c->VulkanUpscaler.set_volatile_value(u);else {error(err,cap,"api_not_ready");return 0;}
  if(name=="ffx315"||name=="fsr411")c->FfxUpscalerIndex.set_volatile_value(ffxIndex(st,name));st.newBackend=u;for(auto& e:st.changeBackend)e.second=true;}
  if(on(p,"has_quality")){c->UpscaleRatioOverrideEnabled.set_volatile_value(on(p,"quality_enabled"));c->UpscaleRatioOverrideValue.set_volatile_value(std::clamp(flt(val(p,"quality_ratio"),1.3f),1.0f,3.0f));}
@@ -88,6 +89,5 @@ extern "C" __declspec(dllexport) uint32_t __cdecl SDH_Control_Apply(const char* 
  if(on(p,"has_latencyflex_mode"))c->FN_LatencyFlexMode.set_volatile_value(static_cast<LFXMode>(num(val(p,"latencyflex_mode"),0)));
  if(helix){c->FGNvngxReplacement.set_volatile_value(FGNvngxReplacement::HelixSR);st.fgChanged=true;}
  if(on(p,"has_fg_provider")&&val(p,"fg_provider")=="off"){c->FGEnabled.set_volatile_value(false);st.fgChanged=true;}
- if(on(p,"has_shader")||on(p,"has_scale")||on(p,"has_motion_sharpness")||on(p,"has_contrast")||on(p,"has_fg_smoothness")||on(p,"has_color_space")||on(p,"has_auto_exposure")||on(p,"has_motion_vectors")||on(p,"has_root_signature_fix")||on(p,"has_resource_barrier_fix")||on(p,"has_precompiled_shaders")||on(p,"has_xess_build_pipelines")||on(p,"has_xess_create_heaps")||on(p,"has_shortcut_key")){error(err,cap,"control_requires_full_bridge_dev1");return 0;}
  error(err,cap,"");return 1;
 }

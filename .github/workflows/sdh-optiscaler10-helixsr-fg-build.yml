@@ -22,7 +22,7 @@ jobs:
           git clone --recurse-submodules --branch helixsr https://github.com/lonewolf0622/HelixSR-Scaler.git source
           if ($LASTEXITCODE -ne 0) { throw "clone failed" }
           Push-Location source
-          git checkout --detach 811ff47ed633db454f84b8e82646afbfba13ae71
+          git checkout --detach 74fe671ff10ac25c8182042e977c28758f4deb5f
           if ($LASTEXITCODE -ne 0) { throw "checkout failed" }
           git submodule update --init --recursive
           if ($LASTEXITCODE -ne 0) { throw "submodules failed" }
@@ -56,7 +56,7 @@ jobs:
           Copy-Item sdh-opti10-ci/SDHControlBridge.cpp result/SDHControlBridge.cpp
           @'
           EXPERIMENTAL DEV CI ARTIFACT - NOT FOR INSTALLATION
-          OptiScaler HelixSR fork commit: 811ff47ed633db454f84b8e82646afbfba13ae71
+          OptiScaler HelixSR fork commit: 74fe671ff10ac25c8182042e977c28758f4deb5f
           SDH Control Bridge: protocol 11 smoke version, incomplete control commands.
           DO NOT replace Steam Deck production dxgi.dll or SDH ASI.
           Upstream HelixSR network weights are NOT included.
@@ -66,6 +66,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: SDH-OptiScaler10-HelixSR-FG-MSVC-SMOKE-UNVALIDATED
+          name: SDH-OptiScaler10-HelixSR-v103-FULL-BRIDGE-UNVALIDATED
           path: result/
           if-no-files-found: error

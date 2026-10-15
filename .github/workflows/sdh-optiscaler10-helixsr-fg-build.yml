@@ -1,0 +1,73 @@
+name: SDH OptiScaler10 HelixSR FG isolated MSVC build
+
+on:
+  push:
+    branches:
+      - sdh-optiscaler10-helixsr-fg-dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Checkout pinned HelixSR fork
+        shell: pwsh
+        run: |
+          git clone --recurse-submodules --branch helixsr https://github.com/lonewolf0622/HelixSR-Scaler.git source
+          if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+          Push-Location source
+          git checkout --detach 811ff47ed633db454f84b8e82646afbfba13ae71
+          if ($LASTEXITCODE -ne 0) { throw "checkout failed" }
+          git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw "submodules failed" }
+          Pop-Location
+      - name: Add experimental SDH source bridge
+        shell: pwsh
+        run: |
+          Copy-Item sdh-opti10-ci/SDHControlBridge.cpp source/OptiScaler/SDHControlBridge.cpp
+          python sdh-opti10-ci/patch.py source
+          if ($LASTEXITCODE -ne 0) { throw "patch failed" }
+      - name: Compile with MSVC (Release, x64)
+        shell: pwsh
+        run: |
+          Push-Location source
+          msbuild /m /p:Configuration=Release /p:Platform=x64 OptiScaler.sln /verbosity:minimal "/flp:errorsonly;logfile=msbuild-errors.log"
+          $status=$LASTEXITCODE
+          Pop-Location
+          if ($status -ne 0) {
+            if (Test-Path source/msbuild-errors.log) { Get-Content source/msbuild-errors.log -TotalCount 100 }
+            throw "OptiScaler MSVC build failed"
+          }
+      - name: Verify bridge exports, don't deploy
+        shell: pwsh
+        run: |
+          $out='source/x64/Release/a/OptiScaler.dll'
+          if (!(Test-Path $out)) { throw "MSVC DLL absent" }
+          $exports=(dumpbin /exports $out | Out-String)
+          foreach ($n in @('SDH_Control_Version','SDH_Control_Apply','SDH_Control_Snapshot','SDH_Control_RealSwapchain','SDH_Control_ConfigPathW')) {
+            if (!$exports.Contains($n)) { throw "Missing export: $n" }
+          }
+          New-Item -ItemType Directory -Force result | Out-Null
+          Copy-Item $out result/OptiScaler.dll
+          Copy-Item sdh-opti10-ci/SDHControlBridge.cpp result/SDHControlBridge.cpp
+          @'
+          EXPERIMENTAL DEV CI ARTIFACT - NOT FOR INSTALLATION
+          OptiScaler HelixSR fork commit: 811ff47ed633db454f84b8e82646afbfba13ae71
+          SDH Control Bridge: protocol 11 smoke version, incomplete control commands.
+          DO NOT replace Steam Deck production dxgi.dll or SDH ASI.
+          Upstream HelixSR network weights are NOT included.
+          '@ | Set-Content result/READ-ME-FIRST.txt
+          Write-Output "SDH_EXPORTS=PASS"
+          Get-FileHash $out -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: SDH-OptiScaler10-HelixSR-FG-MSVC-SMOKE-UNVALIDATED
+          path: result/
+          if-no-files-found: error

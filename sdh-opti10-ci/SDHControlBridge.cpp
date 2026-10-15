@@ -50,8 +50,21 @@ extern "C" __declspec(dllexport) void* __cdecl SDH_Control_RealSwapchain(){retur
 extern "C" __declspec(dllexport) uint32_t __cdecl SDH_Control_Snapshot(char*out,uint32_t cap){
  auto*c=Config::Instance();if(!c||!out)return 0;auto&st=State::Instance();
  auto u=st.api==DX11?c->Dx11Upscaler.value_or_default():st.api==Vulkan?c->VulkanUpscaler.value_or_default():c->Dx12Upscaler.value_or_default();
- std::string n=u==Upscaler::DLSS?"helixsr":u==Upscaler::FFX?"ffx315":u==Upscaler::XeSS?"xess":u==Upscaler::FSR22?"fsr22":"other";
- std::string s="api="+std::to_string((int)st.api)+"\nupscaler="+n+"\nbackend="+n+
+ std::string n=u==Upscaler::DLSS?(HelixSR::Found()?"helixsr":"dlss"):
+   u==Upscaler::XeSS?"xess":u==Upscaler::FSR21?"fsr21":u==Upscaler::FSR22?"fsr22":"other";
+ if(u==Upscaler::FFX){
+   n="ffx";
+   const auto& names=st.api==Vulkan?st.ffxUpscalerVersionsVk.names:st.ffxUpscalerVersionsDx12.names;
+   int index=c->FfxUpscalerIndex.value_or_default();
+   if(index>=0 && static_cast<size_t>(index)<names.size()){
+     std::string label=names[static_cast<size_t>(index)]?names[static_cast<size_t>(index)]:"";
+     std::transform(label.begin(),label.end(),label.begin(),[](unsigned char ch){return (char)std::tolower(ch);});
+     if(label.find("4.1.1")!=std::string::npos)n="fsr411";
+     else if(label.find("3.1.5")!=std::string::npos)n="ffx315";
+     else if(label.find("2.3.4")!=std::string::npos)n="ffx234";
+   }
+ }
+ std::string s="api="+std::to_string((int)st.api)+"\nffx_index="+std::to_string(c->FfxUpscalerIndex.value_or_default())+"\nupscaler="+n+"\nbackend="+n+
  "\nfg_input="+input(st.activeFgInput)+"\nfg_output="+output(st.activeFgOutput)+
  "\nfg_provider="+provider(st.activeFgNvngx)+"\nfg_provider_requested="+provider(c->FGNvngxReplacement.value_or_default())+
  "\nfg_enabled="+(c->IsFGEnabled()?std::string("1"):std::string("0"))+
